@@ -1,0 +1,5 @@
+-r requirements-ml.txt
+fastapi==0.162.4
+uvicorn==0.54.0
+httpx==0.28.1
+pytest==9.2.0

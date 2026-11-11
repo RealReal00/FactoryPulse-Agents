@@ -1,0 +1,8 @@
+# Only send files required by the Dockerfile to the build context.
+**
+!Dockerfile
+!requirements-api.txt
+!requirements-ml.txt
+!app.py
+!models/
+!models/random_forest_baseline.joblib

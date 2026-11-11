@@ -1,0 +1,76 @@
+{
+  "selected_model": "standard",
+  "classifier_parameters": {
+    "bootstrap": true,
+    "ccp_alpha": 0.0,
+    "class_weight": null,
+    "criterion": "gini",
+    "max_depth": null,
+    "max_features": "sqrt",
+    "max_leaf_nodes": null,
+    "max_samples": null,
+    "min_impurity_decrease": 0.0,
+    "min_samples_leaf": 1,
+    "min_samples_split": 2,
+    "min_weight_fraction_leaf": 0.0,
+    "monotonic_cst": null,
+    "n_estimators": 100,
+    "n_jobs": null,
+    "oob_score": false,
+    "random_state": 42,
+    "verbose": 0,
+    "warm_start": false
+  },
+  "features": [
+    "Type",
+    "Air temperature [K]",
+    "Process temperature [K]",
+    "Rotational speed [rpm]",
+    "Torque [Nm]",
+    "Tool wear [min]"
+  ],
+  "seed": 42,
+  "dataset_sha256": "59db4f1d9c34c58136d89e5a006ec190dcea19e9dbea74f6b3b0c6f22a44d183",
+  "versions": {
+    "python": "3.12.10",
+    "pandas": "3.1.1",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "scikit-learn": "1.9.1",
+    "joblib": "1.6.0"
+  },
+  "validation_metrics": {
+    "standard": {
+      "precision": 0.78125,
+      "recall": 0.49019607843137253,
+      "f1": 0.6024096385542169,
+      "average_precision": 0.7186383884654461,
+      "confusion_matrix": [
+        [
+          1442,
+          7
+        ],
+        [
+          26,
+          25
+        ]
+      ]
+    },
+    "balanced": {
+      "precision": 0.6590909090909091,
+      "recall": 0.5686274509803921,
+      "f1": 0.6105263157894737,
+      "average_precision": 0.6429733164400736,
+      "confusion_matrix": [
+        [
+          1434,
+          15
+        ],
+        [
+          22,
+          29
+        ]
+      ]
+    }
+  }
+}

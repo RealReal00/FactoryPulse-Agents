@@ -1,5 +1,11 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+import json
+import logging
+import os
 from pathlib import Path
+import sys
+import threading
 from typing import Annotated, Literal
 
 import joblib
@@ -11,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 MODEL_PATH = Path(__file__).resolve().parent / "models" / "random_forest_baseline.joblib"
+logger = logging.getLogger("factorypulse")
+logging_lock = threading.RLock()
+logging_users = 0
+logging_handler = None
 Temperature = Annotated[float, Field(strict=True, allow_inf_nan=False, ge=250, le=400)]
 Speed = Annotated[float, Field(strict=True, allow_inf_nan=False, ge=0, le=5000)]
 Torque = Annotated[float, Field(strict=True, allow_inf_nan=False, ge=0, le=150)]
@@ -19,9 +29,48 @@ Wear = Annotated[float, Field(strict=True, allow_inf_nan=False, ge=0, le=500)]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.model = joblib.load(MODEL_PATH)
-    yield
-    del app.state.model
+    global logging_users, logging_handler
+    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ValueError("Invalid LOG_LEVEL; use DEBUG, INFO, WARNING, ERROR or CRITICAL")
+    with logging_lock:
+        if logging_users == 0:
+            logging_handler = logging.StreamHandler(sys.stderr)
+            logging_handler.setFormatter(JsonFormatter())
+            logger.addHandler(logging_handler)
+            logger.setLevel(level)
+            logger.propagate = False
+        elif logger.level != getattr(logging, level):
+            raise ValueError("Overlapping lifespans require the same LOG_LEVEL")
+        logging_users += 1
+    logger.info("application_start")
+    try:
+        try:
+            path = Path(os.environ.get("MODEL_PATH") or MODEL_PATH)
+            app.state.model = joblib.load(path)
+        except Exception:
+            logger.error("model_load_failed")
+            raise RuntimeError("Unable to load model") from None
+        logger.info("model_loaded")
+        try:
+            yield
+        finally:
+            with logging_lock:
+                if logging_users == 1:
+                    del app.state.model
+    finally:
+        with logging_lock:
+            logging_users -= 1
+            if logging_users == 0:
+                logger.removeHandler(logging_handler)
+                logging_handler.close()
+                logging_handler = None
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({"timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+                           "level": record.levelname, "event": record.getMessage()})
 
 
 app = FastAPI(title="FactoryPulse inference", lifespan=lifespan)
@@ -66,7 +115,13 @@ def predict(conditions: MachineConditions, request: Request):
         "Torque [Nm]": conditions.torque_nm,
         "Tool wear [min]": conditions.tool_wear_min,
     }])
-    model = request.app.state.model
-    index = list(model.classes_).index(1)
-    return Prediction(predicted_class=int(model.predict(row)[0]),
-                      failure_score=float(model.predict_proba(row)[0, index]))
+    try:
+        model = request.app.state.model
+        index = list(model.classes_).index(1)
+        result = Prediction(predicted_class=int(model.predict(row)[0]),
+                            failure_score=float(model.predict_proba(row)[0, index]))
+    except Exception:
+        logger.error("prediction_failed")
+        return JSONResponse(status_code=500, content={"detail": "Prediction failed"})
+    logger.info("prediction_completed")
+    return result

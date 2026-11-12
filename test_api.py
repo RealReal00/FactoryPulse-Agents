@@ -1,3 +1,5 @@
+import json
+import traceback
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -74,5 +76,75 @@ def test_model_load_failure(monkeypatch):
     def fail(_):
         raise FileNotFoundError("model missing")
     monkeypatch.setattr(api.joblib, "load", fail)
-    with pytest.raises(FileNotFoundError), TestClient(api.app):
+    with pytest.raises(RuntimeError, match="Unable to load model"), TestClient(api.app):
         pass
+
+
+def test_structured_logs_and_privacy(capsys, monkeypatch):
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("MODEL_PATH", raising=False)
+    with TestClient(api.app) as client:
+        assert client.post("/predict", json=PAYLOAD).status_code == 200
+    lines = capsys.readouterr().err.splitlines()
+    records = [json.loads(line) for line in lines]
+    assert [r["event"] for r in records] == ["application_start", "model_loaded", "prediction_completed"]
+    assert all(r["timestamp"] and r["level"] == "INFO" for r in records)
+    assert "1500" not in " ".join(lines) and "failure_score" not in " ".join(lines)
+
+
+def test_configuration_model_path_and_level(monkeypatch, capsys):
+    alternate = "alternate-controlled-model.joblib"
+    monkeypatch.setenv("MODEL_PATH", alternate)
+    monkeypatch.setenv("LOG_LEVEL", "ERROR")
+    original_load = api.joblib.load
+    seen = []
+    def load(path):
+        seen.append(str(path))
+        return original_load(api.MODEL_PATH)
+    monkeypatch.setattr(api.joblib, "load", load)
+    with TestClient(api.app) as client:
+        assert client.get("/health").status_code == 200
+    assert seen == [alternate]
+    assert capsys.readouterr().err == ""
+
+
+def test_invalid_level(monkeypatch):
+    monkeypatch.setenv("LOG_LEVEL", "invalid")
+    with pytest.raises(ValueError, match="Invalid LOG_LEVEL"), TestClient(api.app):
+        pass
+
+
+def test_missing_model_logs_failure(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("MODEL_PATH", str(tmp_path / "missing.joblib"))
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    with pytest.raises(RuntimeError, match="Unable to load model") as error:
+        with TestClient(api.app):
+            pass
+    events = [json.loads(line)["event"] for line in capsys.readouterr().err.splitlines()]
+    assert events == ["application_start", "model_load_failed"]
+    rendered = "".join(traceback.format_exception(error.value))
+    assert str(tmp_path) not in rendered and "missing.joblib" not in rendered
+
+
+def test_overlapping_lifespans_keep_single_handler(monkeypatch, capsys):
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("MODEL_PATH", raising=False)
+    with TestClient(api.app) as first:
+        with TestClient(api.app) as second:
+            assert second.post("/predict", json=PAYLOAD).status_code == 200
+        assert first.post("/predict", json=PAYLOAD).status_code == 200
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [r["event"] for r in records].count("prediction_completed") == 2
+    assert [r["event"] for r in records].count("model_loaded") == 2
+
+
+def test_prediction_failure_is_sanitized(monkeypatch, capsys):
+    with TestClient(api.app) as client:
+        def fail(_):
+            raise RuntimeError("sensitive detail")
+        monkeypatch.setattr(api.app.state.model, "predict", fail)
+        response = client.post("/predict", json=PAYLOAD)
+        assert response.status_code == 500
+        assert response.json() == {"detail": "Prediction failed"}
+    logs = capsys.readouterr().err
+    assert "prediction_failed" in logs and "sensitive detail" not in logs and "1500" not in logs

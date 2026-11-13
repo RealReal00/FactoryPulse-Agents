@@ -7,6 +7,7 @@ import time
 from urllib.parse import urlsplit
 
 import httpx
+from simulation_store import atomic_json, now, start_run
 
 
 MACHINES = {"M01": "L", "M02": "M", "M03": "H"}
@@ -31,7 +32,7 @@ def generate_reading(rng, machine_type):
     }
 
 
-def run(client, api_url, interval, cycles, seed):
+def run(client, api_url, interval, cycles, seed, snapshot=None):
     rng = random.Random(seed)
     url = api_url.rstrip("/") + "/predict"
     print("Letture sintetiche; failure_score non è una probabilità calibrata né una previsione temporale.")
@@ -39,6 +40,8 @@ def run(client, api_url, interval, cycles, seed):
     for cycle in range(cycles):
         for machine_id, machine_type in MACHINES.items():
             scenario, payload = generate_reading(rng, machine_type)
+            row = {"cycle": cycle + 1, "machine_id": machine_id, "scenario": scenario,
+                   "reading": payload, "result": None, "error": None}
             try:
                 response = client.post(url, json=payload)
                 response.raise_for_status()
@@ -54,12 +57,22 @@ def run(client, api_url, interval, cycles, seed):
                 print(f"{machine_id} scenario={scenario} classe={result['predicted_class']} "
                       f"failure_score={result['failure_score']}")
                 successes += 1
+                row["result"] = {"predicted_class": predicted_class, "failure_score": score}
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
                 print(f"{machine_id} scenario={scenario} errore={type(exc).__name__}")
                 failures += 1
+                row["error"] = type(exc).__name__
+            if snapshot is not None:
+                folder, data = snapshot
+                data["readings"].append(row)
+                atomic_json(folder / "simulation.json", data)
         if cycle + 1 < cycles:
             time.sleep(interval)
     print(f"Riepilogo: riuscite={successes} fallite={failures}")
+    if snapshot is not None:
+        data.update(status="failed" if failures else "completed", finished_at=now(),
+                    succeeded=successes, failed=failures)
+        atomic_json(folder / "simulation.json", data)
     return 1 if failures else 0
 
 
@@ -87,7 +100,9 @@ def main():
     if not math.isfinite(args.interval) or args.interval < 0 or args.cycles < 1:
         parser.error("interval deve essere finito e >= 0; cycles deve essere >= 1")
     with httpx.Client(timeout=10.0) as client:
-        return run(client, args.api_url, args.interval, args.cycles, args.seed)
+        snapshot = start_run(args.cycles, args.seed)
+        print(f"Simulazione: {snapshot[1]['run_id']} ({snapshot[0]})")
+        return run(client, args.api_url, args.interval, args.cycles, args.seed, snapshot)
 
 
 if __name__ == "__main__":

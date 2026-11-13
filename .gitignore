@@ -40,3 +40,4 @@ credentials.*
 *~
 .DS_Store
 Thumbs.db
+simulation_results/

@@ -2,6 +2,7 @@
 import argparse
 import json
 import threading
+from itertools import count
 from pathlib import Path
 
 from strands import Agent, tool
@@ -76,11 +77,22 @@ class Trace:
                   result=content, error=type(event.exception).__name__ if event.exception else None)
 
 
+def create_analysis_directory(simulation_folder):
+    for number in count(1):
+        folder = simulation_folder / f"analysis_{number:03d}"
+        try:
+            folder.mkdir()
+        except FileExistsError:
+            continue
+        return folder
+
+
 def analyze(question, run_id="latest", root=ROOT):
     data = read_run(run_id, root)
     summary = summarize(data)
     selected_id = data["run_id"]
-    folder = root / selected_id
+    folder = create_analysis_directory(root / selected_id)
+    report = folder / "report.md"
     trace = Trace(folder / "agent_trace")
     trace.emit("agent_started", question=question, run_id=selected_id, simulation_status=data["status"])
     called = [] #Verificare che il nostro agente abbia effettivamente chiamato il tool per leggere i risultati.
@@ -106,12 +118,18 @@ def analyze(question, run_id="latest", root=ROOT):
             answer = (f"Stato della simulazione: {summary['status']}. "
                       f"Letture registrate: {summary['recorded_readings']}/{summary['expected_readings']}. "
                       f"Letture mancanti: {len(summary['missing_readings'])}. {INSUFFICIENT_DATA}")
-        (folder / "report.md").write_text(f"# Analysis {selected_id}\n\n{answer}\n", encoding="utf-8")
-        trace.emit("agent_completed", run_id=selected_id)
-        return answer
+        report.write_text(f"# Analysis {selected_id}\n\n{answer}\n", encoding="utf-8")
     except Exception as exc:
-        trace.emit("agent_error", error=type(exc).__name__)
+        error_type = type(exc).__name__
+        trace.emit("agent_error", error=error_type)
+        try:
+            report.write_text(f"# Analysis {selected_id}\n\nAnalisi fallita ({error_type}).\n", encoding="utf-8")
+        except OSError:
+            # Preserve the original error if the report cannot be written.
+            pass
         raise
+    trace.emit("agent_completed", run_id=selected_id)
+    return answer
 
 
 def main():

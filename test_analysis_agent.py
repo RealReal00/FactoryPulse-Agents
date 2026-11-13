@@ -1,5 +1,7 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from threading import Barrier
 from types import SimpleNamespace
 
 import httpx
@@ -111,7 +113,7 @@ def test_latest_interrupted_before_first_reading(tmp_path, monkeypatch):
     answer = analysis_agent.analyze("Quali sono le classificazioni?", root=tmp_path)
     assert "dati sufficienti" in answer
     assert "Letture mancanti: 3" in answer
-    assert answer in (folder / "report.md").read_text(encoding="utf-8")
+    assert answer in (folder / "analysis_001" / "report.md").read_text(encoding="utf-8")
     assert read_run(old["run_id"], tmp_path)["seed"] == 1
     assert not (tmp_path / "latest.json").exists()
 
@@ -203,3 +205,89 @@ def test_trace_preserves_non_json_text(tmp_path):
                             result={"status": "success", "content": [{"text": "plain text"}]}, exception=None)
     trace.after_tool(event)
     assert json.loads(next(trace.directory.iterdir()).read_text(encoding="utf-8"))["result"] == "plain text"
+
+
+@pytest.mark.parametrize("first_fails", [False, True])
+def test_repeated_analysis_preserves_reports_and_traces(tmp_path, monkeypatch, first_fails):
+    import analysis_agent
+
+    folder, data = start_run(1, 42, tmp_path)
+    original_snapshot = (folder / "simulation.json").read_bytes()
+    legacy_trace = folder / "agent_trace"
+    legacy_trace.mkdir()
+    legacy_event = legacy_trace / "001_agent_started.json"
+    legacy_event.write_text("{}", encoding="utf-8")
+    legacy_report = folder / "report.md"
+    legacy_report.write_text("Legacy report", encoding="utf-8")
+
+    class FakeAgent:
+        def __init__(self, *, tools, **kwargs):
+            self.tool = tools[0]
+
+        def __call__(self, question):
+            if first_fails and question == "Prima domanda":
+                raise ConnectionError("Ollama unavailable")
+            assert json.loads(self.tool())["run_id"] == data["run_id"]
+            return question
+
+    monkeypatch.setattr(analysis_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(analysis_agent, "OllamaModel", lambda **kwargs: None)
+
+    first = folder / "analysis_001"
+    if first_fails:
+        with pytest.raises(ConnectionError):
+            analysis_agent.analyze("Prima domanda", root=tmp_path)
+        event = first / "agent_trace" / "002_agent_error.json"
+        assert json.loads(event.read_text(encoding="utf-8"))["error"] == "ConnectionError"
+        assert "Analisi fallita" in (first / "report.md").read_text(encoding="utf-8")
+    else:
+        answer = analysis_agent.analyze("Prima domanda", root=tmp_path)
+        assert answer in (first / "report.md").read_text(encoding="utf-8")
+        assert (first / "agent_trace" / "002_agent_completed.json").is_file()
+
+    first_files = {path: path.read_bytes() for path in first.rglob("*") if path.is_file()}
+    answer = analysis_agent.analyze("Seconda domanda", run_id=data["run_id"], root=tmp_path)
+    second = folder / "analysis_002"
+    assert answer in (second / "report.md").read_text(encoding="utf-8")
+    started = second / "agent_trace" / "001_agent_started.json"
+    assert json.loads(started.read_text(encoding="utf-8"))["question"] == "Seconda domanda"
+    assert (second / "agent_trace" / "002_agent_completed.json").is_file()
+    assert {path: path.read_bytes() for path in first.rglob("*") if path.is_file()} == first_files
+    assert legacy_event.read_text(encoding="utf-8") == "{}"
+    assert legacy_report.read_text(encoding="utf-8") == "Legacy report"
+    assert (folder / "simulation.json").read_bytes() == original_snapshot
+
+
+def test_concurrent_analyses_use_separate_directories(tmp_path, monkeypatch):
+    import analysis_agent
+
+    folder, data = start_run(1, 42, tmp_path)
+    barrier = Barrier(2, timeout=10)
+
+    class FakeAgent:
+        def __init__(self, *, tools, **kwargs):
+            self.tool = tools[0]
+
+        def __call__(self, question):
+            barrier.wait()
+            assert json.loads(self.tool())["run_id"] == data["run_id"]
+            return question
+
+    monkeypatch.setattr(analysis_agent, "Agent", FakeAgent)
+    monkeypatch.setattr(analysis_agent, "OllamaModel", lambda **kwargs: None)
+
+    questions = {"Domanda A", "Domanda B"}
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [executor.submit(analysis_agent.analyze, question, data["run_id"], tmp_path)
+                   for question in questions]
+        for result in results:
+            assert result.result(timeout=15)
+
+    recorded_questions = set()
+    for name in ("analysis_001", "analysis_002"):
+        analysis = folder / name
+        started = analysis / "agent_trace" / "001_agent_started.json"
+        recorded_questions.add(json.loads(started.read_text(encoding="utf-8"))["question"])
+        assert (analysis / "agent_trace" / "002_agent_completed.json").is_file()
+        assert (analysis / "report.md").is_file()
+    assert recorded_questions == questions

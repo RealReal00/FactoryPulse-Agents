@@ -56,6 +56,7 @@ def run(client, api_url, interval, cycles, seed, snapshot=None):
                     raise ValueError("Invalid response")
                 print(f"{machine_id} scenario={scenario} classe={result['predicted_class']} "
                       f"failure_score={result['failure_score']}")
+                #success = per contare quante predizioni sono state completate correttamente.
                 successes += 1
                 row["result"] = {"predicted_class": predicted_class, "failure_score": score}
             except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:

@@ -7,6 +7,8 @@ from app import MachineConditions
 from machine_simulator import MACHINES, generate_reading, run, valid_api_url, main
 
 
+# Verifica che lo stesso seed riproduca entrambi gli scenari, con dati validi
+# per l'API e temperature e velocità coerenti con i limiti attesi.
 def test_reproducible_scenarios_and_valid_payloads():
     def samples():
         rng = random.Random(42)
@@ -23,6 +25,8 @@ def test_reproducible_scenarios_and_valid_payloads():
             assert payload["rotational_speed_rpm"] < 1380
 
 
+# Verifica con un trasporto HTTP simulato che due cicli inviino sei richieste
+# a /predict e mostrino macchina, classe e punteggio.
 def test_three_machines_and_http_requests(capsys):
     received = []
     def handler(request):
@@ -39,6 +43,8 @@ def test_three_machines_and_http_requests(capsys):
     assert "classe=1" in output and "failure_score=0.95" in output
 
 
+# Verifica che un errore di connessione e un HTTP 503 non fermino la terza
+# macchina e che il ciclo si concluda comunque con codice di errore 1.
 def test_http_errors_do_not_stop_other_machines(capsys):
     calls = []
     def handler(request):
@@ -55,16 +61,21 @@ def test_http_errors_do_not_stop_other_machines(capsys):
     assert "M03" in output and "classe=0" in output
 
 
+# Verifica che siano rifiutati gli URL con schema, host o porta non validi,
+# oppure con una query.
 @pytest.mark.parametrize("url", ["http://", "ftp://example.com", "localhost:8000", "http://bad host", "http://example.com:99999", "http://example.com?x=1"])
 def test_invalid_urls(url):
     assert not valid_api_url(url)
 
 
+# Verifica che siano accettati URL HTTP e HTTPS, inclusi un percorso e un host IPv6.
 @pytest.mark.parametrize("url", ["http://localhost:8000", "https://example.com/api", "http://[::1]:8000"])
 def test_valid_urls(url):
     assert valid_api_url(url)
 
 
+# Verifica che un HTTP 200 con JSON, classe o punteggio non validi
+# conti come errore per tutte e tre le richieste.
 @pytest.mark.parametrize("response", [
     httpx.Response(200, content=b"not json"),
     httpx.Response(200, json={"predicted_class": 1}),
@@ -80,6 +91,8 @@ def test_invalid_responses_fail_all_requests(response, capsys):
     assert "riuscite=0 fallite=3" in capsys.readouterr().out
 
 
+# Verifica che un timeout simulato lasci proseguire le altre richieste
+# e produca due successi, un fallimento e codice di uscita 1.
 def test_timeout_partial_failure(capsys):
     calls = []
     def handler(request):
@@ -93,6 +106,7 @@ def test_timeout_partial_failure(capsys):
     assert "ReadTimeout" in output and "riuscite=2 fallite=1" in output
 
 
+# Verifica che la CLI rifiuti --api-url non valido con SystemExit e codice 2.
 def test_cli_rejects_invalid_url_before_client(monkeypatch):
     monkeypatch.setattr("sys.argv", ["machine_simulator.py", "--api-url", "http://"])
     with pytest.raises(SystemExit) as error:

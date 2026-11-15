@@ -25,6 +25,8 @@ def get_speed(machine_id: str) -> str:
     return f"{value} rpm"
 
 
+# Verifica con Ollama che Strands chiami una sola volta il tool atteso per M01
+# e riporti nella risposta il valore restituito dal tool.
 def run_test(question: str, expected_tool: str, expected_value: str) -> bool:
     calls.clear()
     agent = Agent(

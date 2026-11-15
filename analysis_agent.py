@@ -20,6 +20,7 @@ def summarize(data):
     rows = data["readings"]
     recorded = {(row["cycle"], row["machine_id"]) for row in rows}
     valid_count = sum(row.get("result") is not None for row in rows)
+    #quali letture mancano nella simulazione, cioè per quali combinazioni di ciclo e macchina non abbiamo registrato dati
     missing = [
         {"cycle": cycle, "machine_id": machine_id}
         for cycle in range(1, data["cycles"] + 1)

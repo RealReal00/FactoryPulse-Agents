@@ -16,7 +16,7 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 #Cosa succede se il programma si interrompe mentre sta scrivendo il file?
-#L'idea è semplice: prima scriviamo un file temporaneo e soltanto quando è completo lo sostituiamo al file definitivo.
+#prima scriviamo un file temporaneo e soltanto quando è completo lo sostituiamo al file definitivo.
 def atomic_json(path, value):
     temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
@@ -36,7 +36,7 @@ def start_run(cycles, seed, root=ROOT):
         folder.mkdir()
     except FileExistsError:
         raise FileExistsError("Simulation ID already exists; retry in a different second") from None
-    #inizializzo "data" all'avvio della run e il file simulation si aggiornerà nel corso della run
+    #data è il formato che vedrò in simulation.json
     data = {"schema_version": 1, "run_id": run_id, "started_at": started.isoformat(), "finished_at": None,
             "status": "running", "cycles": cycles, "seed": seed, "readings": []}
     atomic_json(folder / "simulation.json", data)
@@ -89,7 +89,7 @@ def read_run(run_id="latest", root=ROOT):
         started = started_at(data)
         if latest_requested and (datetime.now(timezone.utc) - started).total_seconds() > 86400:
             raise ValueError("Latest simulation is older than 24 hours; select its run ID explicitly")
-        seen = set()
+        seen = set() #per verificare che non ci siano letture duplicate nella simulazione
         for row in data["readings"]:
             if not isinstance(row, dict) or row.get("machine_id") not in ("M01", "M02", "M03") or type(row.get("cycle")) is not int or not 1 <= row["cycle"] <= data["cycles"] or row.get("scenario") not in ("normale", "critico") or not isinstance(row.get("reading"), dict):
                 raise ValueError("Invalid reading")
@@ -97,7 +97,9 @@ def read_run(run_id="latest", root=ROOT):
             if key in seen:
                 raise ValueError("Duplicate reading")
             seen.add(key)
-            result, error = row.get("result"), row.get("error")
+            # verificare che ogni lettura salvata nel file simulation.json contenga un risultato 
+            # di predizione valido oppure un errore valido.
+            result, error = row.get("result"), row.get("error") 
             if result is not None:
                 if not isinstance(result, dict) or type(result.get("predicted_class")) is not int or result["predicted_class"] not in (0, 1) or type(result.get("failure_score")) not in (int, float) or not math.isfinite(result["failure_score"]) or not 0 <= result["failure_score"] <= 1 or error is not None:
                     raise ValueError("Invalid prediction")

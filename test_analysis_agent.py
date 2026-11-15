@@ -12,6 +12,8 @@ from machine_simulator import run
 from simulation_store import atomic_json, read_run, start_run
 
 
+# Verifica che un ciclo con risposte HTTP simulate salvi tre letture e che
+# il riepilogo riporti le classi restituite dall'API.
 def test_simulation_persistence_and_summary(tmp_path):
     snapshot = start_run(1, 42, tmp_path)
     assert read_run("latest", tmp_path)["status"] == "running"
@@ -26,6 +28,8 @@ def test_simulation_persistence_and_summary(tmp_path):
     assert all(row["result"]["predicted_class"] == 1 for row in summarize(data)["results"])
 
 
+# Verifica che latest scelga la simulazione più recente anche se le risposte
+# HTTP 503 la fanno terminare in errore senza classificazioni.
 def test_failed_and_incomplete_runs_are_not_old_results(tmp_path, monkeypatch):
     old = start_run(1, 1, tmp_path)
     import simulation_store
@@ -42,6 +46,8 @@ def test_failed_and_incomplete_runs_are_not_old_results(tmp_path, monkeypatch):
     assert result["status"] == "failed" and all(row["result"] is None for row in result["readings"])
 
 
+# Con l'orologio fissato, verifica il nome in ora italiana e che un secondo
+# avvio nello stesso istante sollevi FileExistsError.
 def test_run_name_and_collision(tmp_path, monkeypatch):
     import simulation_store
     class FixedTime(datetime):
@@ -56,6 +62,8 @@ def test_run_name_and_collision(tmp_path, monkeypatch):
     assert read_run("latest", tmp_path)["run_id"] == data["run_id"]
 
 
+# Verifica che read_run sollevi ValueError per dati mancanti, un ID che punta
+# fuori dalla cartella delle simulazioni o un file JSON malformato.
 def test_invalid_or_missing_files(tmp_path):
     with pytest.raises(ValueError):
         read_run("latest", tmp_path)
@@ -67,6 +75,8 @@ def test_invalid_or_missing_files(tmp_path):
         read_run(data["run_id"], tmp_path)
 
 
+# Verifica che oltre 24 ore serva l'ID esplicito e che una simulazione
+# dichiarata completa ma priva di letture venga comunque rifiutata.
 def test_old_latest_requires_explicit_run_id(tmp_path):
     folder, data = start_run(1, 1, tmp_path)
     data["started_at"] = "2000-01-01T00:00:00+00:00"
@@ -80,6 +90,8 @@ def test_old_latest_requires_explicit_run_id(tmp_path):
         read_run(data["run_id"], tmp_path)
 
 
+# Verifica con un agente simulato che il tool legga l'ultima simulazione
+# senza letture e che il report segnali tre letture mancanti e dati insufficienti.
 def test_latest_interrupted_before_first_reading(tmp_path, monkeypatch):
     import analysis_agent
     import simulation_store
@@ -118,6 +130,8 @@ def test_latest_interrupted_before_first_reading(tmp_path, monkeypatch):
     assert not (tmp_path / "latest.json").exists()
 
 
+# Verifica che dopo un'interruzione il riepilogo distingua la classificazione
+# salvata, la risposta HTTP fallita e la lettura non registrata.
 def test_interrupted_after_partial_readings(tmp_path):
     snapshot = start_run(1, 42, tmp_path)
     responses = iter([httpx.Response(200, json={"predicted_class": 0, "failure_score": 0.1}),
@@ -142,6 +156,8 @@ def test_interrupted_after_partial_readings(tmp_path):
     assert data["missing_readings"] == [{"cycle": 1, "machine_id": "M03"}]
 
 
+# Simula scritture sovrapposte al cambio d'ora e verifica che latest usi
+# l'istante di avvio anche quando il nome e l'ordine di scrittura ingannano.
 def test_latest_uses_start_time_even_when_older_snapshot_is_published_last(tmp_path, monkeypatch):
     import simulation_store
 
@@ -169,6 +185,8 @@ def test_latest_uses_start_time_even_when_older_snapshot_is_published_last(tmp_p
     assert read_run(old["run_id"], tmp_path)["seed"] == 1
 
 
+# Verifica che timestamp equivalenti con offset diversi siano ordinati per ID
+# e che latest scelga l'ID maggiore.
 def test_latest_breaks_equal_timestamp_ties_by_run_id(tmp_path):
     started = datetime.now(timezone.utc)
     ids = ("test_2000-01-01__00-00-01", "test_2000-01-01__00-00-00")
@@ -182,6 +200,8 @@ def test_latest_breaks_equal_timestamp_ties_by_run_id(tmp_path):
     assert read_run("latest", tmp_path)["run_id"] == max(ids)
 
 
+# Verifica con eventi simulati che la traccia salvi i file in ordine e strutturi
+# il JSON del tool senza alterare la risposta originale.
 def test_trace_hooks_record_order_and_contents(tmp_path, capsys):
     trace = Trace(tmp_path / "agent_trace")
     trace.emit("agent_started", question="Question")
@@ -199,6 +219,7 @@ def test_trace_hooks_record_order_and_contents(tmp_path, capsys):
     assert len(capsys.readouterr().out.splitlines()) == 4
 
 
+# Verifica che il testo del risultato del tool venga salvato anche se non è JSON.
 def test_trace_preserves_non_json_text(tmp_path):
     trace = Trace(tmp_path / "trace")
     event = SimpleNamespace(tool_use={"name": "tool", "input": {}},
@@ -207,6 +228,8 @@ def test_trace_preserves_non_json_text(tmp_path):
     assert json.loads(next(trace.directory.iterdir()).read_text(encoding="utf-8"))["result"] == "plain text"
 
 
+# Verifica che una seconda analisi riesca anche dopo un errore simulato
+# e che report e tracce precedenti restino intatti.
 @pytest.mark.parametrize("first_fails", [False, True])
 def test_repeated_analysis_preserves_reports_and_traces(tmp_path, monkeypatch, first_fails):
     import analysis_agent
@@ -258,6 +281,8 @@ def test_repeated_analysis_preserves_reports_and_traces(tmp_path, monkeypatch, f
     assert (folder / "simulation.json").read_bytes() == original_snapshot
 
 
+# Verifica che due analisi sovrapposte della stessa simulazione creino cartelle
+# distinte con un report e una traccia per ciascuna domanda.
 def test_concurrent_analyses_use_separate_directories(tmp_path, monkeypatch):
     import analysis_agent
 
